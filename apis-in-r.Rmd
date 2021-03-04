@@ -3,14 +3,17 @@ title: "Working with APIs in R"
 author: "Francesca Giannetti"
 date: "3/1/2021"
 output:
+  pdf_document: default
   html_document:
     df_print: paged
-  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
 Sys.setenv(TZ="America/New_York") # set timezone to avoid timedatectl error when loading spotifyr 
 
+if (!(require(ggplot2))) {
+  install.packages("ggplot2")
+}
 if (!(require(devtools))) {
   install.packages("devtools")
 }
@@ -19,6 +22,9 @@ if (!(require(jsonlite))) {
 }
 if (!(require(dplyr))) {
   install.packages("dplyr")
+}
+if (!(require(rmarkdown))) {
+  install.packages("rmarkdown")
 }
 if (!(require(knitr))) {
   install.packages("knitr")
@@ -29,6 +35,7 @@ devtools::install_github('charlie86/spotifyr')
 library(nytimes)
 library(spotifyr)
 library(jsonlite)
+library(dplyr)
 library(knitr)
 knitr::opts_chunk$set(echo = TRUE)
 options(gargle_oob_default = TRUE)
@@ -51,23 +58,22 @@ Next, go to <https://developer.spotify.com/dashboard/login> and log into your ac
 ## set your NYT and Spotify keys as system variables to access during our session
 ## replace the stuff in quotes with your personal key
 
-Sys.setenv(NYTIMES_KEY="YOUR_API_KEY_HERE")
+Sys.setenv(NYTIMES_KEY="YOUR_NYT_API_KEY_HERE")
 
 ## alternately, you can save your key to file and access it when needed with the `load()` function
 
-nyt_apikey <- "YOUR_API_KEY_HERE"
+nyt_apikey <- "YOUR_NYT_API_KEY_HERE"
 save(nyt_apikey, file = "nytimes_apikey")
 
 ## now, the same for Spotify
 
-spotify_id <- "YOUR_CLIENT_ID"
-spotify_secret <- "YOUR_CLIENT_SECRET"
+spotify_id <- "YOUR_SPOTIFY_CLIENT_ID"
+spotify_secret <- "YOUR_SPOTIFY_CLIENT_SECRET"
 Sys.setenv(SPOTIFY_CLIENT_ID = spotify_id)
 Sys.setenv(SPOTIFY_CLIENT_SECRET = spotify_secret)
 access_token <- get_spotify_access_token()
 
-spotify_token <- get_spotify_access_token( client_id = id, client_secret = secret)
-save(spotify_token, file = "spotify_token")
+saveRDS(access_token, "spotify_token.rds")
 
 ```
 
@@ -89,6 +95,9 @@ The R developer community can often be relied upon to develop packages that aid 
 
 ```{r nytimes, eval=FALSE}
 
+# read your NYT api key back into memory, if needed
+load("nytimes_apikey")
+
 ## get http response objects for search about the Nobel Prize in literature
 nobel1 <- nyt_search("nobel prize literature", n=100)
 
@@ -105,10 +114,13 @@ Kearney's package is a great way to get started. But you'll notice that this pac
 
 ```{r morrison, eval=FALSE}
 
+# read your NYT api key back into memory, if needed
+# load("nytimes_apikey")
+
 # let's start with a simple query
 # insert your API key directly into the URL where indicated
 
-morrison <- fromJSON("http://api.nytimes.com/svc/search/v2/articlesearch.json?q=toni+morrison&api-key=YOUR_API_KEY_HERE", flatten = TRUE) %>% data.frame()
+morrison <- fromJSON(paste0("http://api.nytimes.com/svc/search/v2/articlesearch.json?q=toni+morrison&api-key=", nyt_apikey), flatten = TRUE) %>% data.frame()
 
 ```
 
@@ -117,6 +129,9 @@ Let's have a look at our `morrison` object. You'll notice that it only returns 1
 
 ```{r jsonlite, eval=FALSE}
 
+# read your NYT api key back into memory, if needed
+load("nytimes_apikey")
+
 # Let's set some parameters
 term <- "nobel+prize+literature" # Need to use + to string together separate words
 begin_date <- "19990101" # Let's look at a decade of matches
@@ -124,7 +139,7 @@ end_date <- "20090101"
 
 baseurl <- paste0("http://api.nytimes.com/svc/search/v2/articlesearch.json?q=",term,
                   "&begin_date=",begin_date,"&end_date=",end_date,
-                  "&facet_filter=true&api-key=",NYTIMES_KEY, sep="")
+                  "&facet_filter=true&api-key=",nyt_apikey, sep="")
 
 initialQuery <- fromJSON(baseurl)
 maxPages <- round((initialQuery$response$meta$hits[1] / 10)-1) 
@@ -133,7 +148,7 @@ nobel_pages <- vector("list",length=maxPages)
 
 for(i in 0:maxPages){
   nytSearch <- fromJSON(paste0(baseurl, "&page=", i), flatten = TRUE) %>% data.frame() 
-  pages[[i+1]] <- nytSearch 
+  nobel_pages[[i+1]] <- nytSearch 
   Sys.sleep(6) # wait 6 seconds between calls
 }
 
@@ -158,6 +173,8 @@ p1 <- nobel_articles %>%
   top_n(10, percent) %>% 
   ggplot(aes(x=reorder(response.docs.type_of_material, percent), y=percent, fill = response.docs.type_of_material)) +
   geom_bar(stat = "identity") + 
+  labs(x = "Type of Material by Percent", y = NULL) +
+  guides(fill=guide_legend(title=NULL)) +
   theme_minimal() +
   coord_flip()
 
@@ -171,7 +188,10 @@ p2 <- nobel_articles %>%
   group_by(pubYear) %>% 
   summarise(count=n()) %>% 
   ggplot(aes(x=reorder(pubYear, count), y=count)) +
-  geom_bar(stat="identity") + coord_flip()
+  geom_bar(stat="identity") + 
+  labs(x = "Year of Publication", y = "Count", title = "Number of Articles Mentioning 'Nobel Prize Literature'") + 
+  theme_minimal() +
+  coord_flip() 
 
 p2
 
@@ -186,17 +206,22 @@ Let's now try the **Artists > Related Artists** endpoint in the console. You can
 
 There are a couple of R packages that facilitate queries to the Spotify Web API. We will try `spotifyr`, although `Rspotify` is also worthy of exploration. The documentation for `spotifyr` is available here: <https://www.rcharlie.com/spotifyr/>. Also by typing `help(package="spotifyr")` at the console below. 
 
-```{r spotify_queries, eval=FALSE}
+```{r spotify_queries, eval=TRUE, message=FALSE, warning=FALSE}
+
+# read your Spotify credentials back into memory, if needed
+readRDS("spotify_token.rds")
 
 ## a few sample queries using spotifyr
 
 beatles <- get_artist_audio_features('the beatles')
 
+## create a table of the top 5 key signatures
 beatles %>% 
   count(key_mode, sort = TRUE) %>% 
   head(5) %>% 
-  kable()
+  kable() 
 
+## retrieve the top 25 "britpop" artists
 artists_by_genres <- get_genre_artists(genre = "britpop", limit = 25)
 
 ```
@@ -207,7 +232,10 @@ Let's have a closer look at the `beatles` object above. Click on the object in y
 
 Valence, for instance, is a measure of musical positivity. 
 
-```{r audio_features, eval=FALSE}
+```{r audio_features, eval=TRUE}
+
+# read your Spotify credentials back into memory, if needed
+# readRDS("spotify_token.rds")
 
 beatles %>% arrange(-valence) %>% 
   select(track_name, valence) %>% 
@@ -217,13 +245,32 @@ beatles %>% arrange(-valence) %>%
 ```
 And Spotify’s danceability index is based on “tempo, rhythm stability, beat strength, and overall regularity”. A value of 0.0 is least danceable and 1.0 is most danceable.
 
-```{r danceability, eval=FALSE}
+```{r danceability, eval=TRUE}
 
 p3 <- ggplot(beatles, aes(x=danceability)) +
   geom_density(alpha=0.7) +
   labs(x="Danceability", y="Density") +
   theme_minimal() +
   ggtitle("Distribution of Beatles Danceability Data")
+
+p3
 ```
+
+```{r bowie, message=FALSE}
+
+## adding an extra package
+## install.packages('ggridges')
+library(ggridges)
+
+bowie <- get_artist_audio_features("David Bowie")
+
+p4 <- ggplot(bowie, aes(x = valence, y = stringr::str_trunc(album_name, 18))) +
+  geom_density_ridges() +
+  theme_ridges() +
+  labs(y = "albums", x = "valence", title="Valence Distributions of Bowie's Albums")
+
+p4
+```
+
 
 What other questions can we come up with to explore Spotify's audio features?
